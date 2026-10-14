@@ -63,6 +63,12 @@ def policy():
         return {}
 
 
+def _allow_missing(rules=None):
+    rules = policy() if rules is None else rules
+    value = rules.get("allow_missing", [])
+    return value if isinstance(value, list) else []
+
+
 def audiences(source, *, rules=None):
     rules = policy() if rules is None else rules
     allowed = set(rules.get("default", ["host", "local"]))
@@ -248,6 +254,12 @@ def prepare(text, *, audience, sources, explicit=False, rules=None):
                 parent = _vault(path.absolute().parent)
                 path = resolve_note_path(path.name, parent, allow_protected=True)
                 if not path.exists():
+                    # Opt-in: scratch locations the owner granted explicitly (e.g. an
+                    # agent's temp outputs wiped by a reboot) may be gone; nothing
+                    # else is ever excused, so the default stays fail-closed.
+                    if not explicit and any(fnmatch.fnmatchcase(source, str(pattern))
+                                            for pattern in _allow_missing(rules)):
+                        continue
                     raise EgressDenied("Cannot inspect a missing derivation source")
                 canonical = str(path)
                 if not explicit and audience not in audiences(canonical, rules=rules):

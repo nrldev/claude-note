@@ -102,6 +102,17 @@ class CodexTranscriptTests(unittest.TestCase):
         ])
         self.assertEqual(read_transcript(path).assistant_texts, ["Answer"])
 
+    def test_nul_padding_from_a_crashed_append_is_counted_not_malformed(self):
+        path = _write([{"type": "user", "message": {"content": "hello"}}])
+        with path.open("ab") as handle:
+            handle.write(b"\0" * 64 + json.dumps({"type": "queue-operation"}).encode() + b"\n")
+            handle.write(json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "hi"}]}}).encode() + b"\n")
+        content = read_transcript(path)
+        self.assertEqual(content.assistant_texts, ["hi"])
+        self.assertEqual(content.coverage["malformed_records"], 0)
+        self.assertEqual(content.coverage["nul_padded_records"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

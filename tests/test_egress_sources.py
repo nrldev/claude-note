@@ -114,6 +114,18 @@ class EgressSourceFormats(unittest.TestCase):
             with self.subTest(name=source.name), self.assertRaises(egress.EgressDenied):
                 self.prepare(source)
 
+    def test_allow_missing_excuses_only_listed_granted_scratch_paths(self):
+        scratch = self.root / 'scratch'
+        scratch.mkdir()
+        gone = scratch / 'task.output'
+        excused = {'default': ['model'], 'allow_missing': [str(scratch) + '/*']}
+        self.assertEqual(self.prepare(gone, rules=excused), 'Public converted source view')
+        with self.assertRaises(egress.EgressDenied):
+            self.prepare(self.root / 'absent.md', rules=excused)
+        ungranted = {'default': ['host'], 'allow_missing': [str(scratch) + '/*']}
+        with self.assertRaises(egress.EgressDenied):
+            self.prepare(gone, rules=ungranted)
+
     def test_parent_alias_requires_supplied_and_canonical_policy(self):
         actual = self.root / 'actual'
         actual.mkdir()

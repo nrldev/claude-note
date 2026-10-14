@@ -502,9 +502,14 @@ def _attach_sources(content: TranscriptContent, path: Path, raw=None, trailing_b
     content._source_bytes = raw  # one immutable snapshot for parsing/checkpoint identity
     content.source_revision = hashlib.sha256(raw).hexdigest()
     content.source_path = str(path.absolute())
-    malformed = 0
+    malformed = nul_padded = 0
     calls = {tool.call_id: tool for tool in content.tool_uses if tool.call_id}
     for number, line in enumerate(raw.splitlines(), 1):
+        if line.startswith(b"\0"):
+            # A crash mid-append leaves NUL padding before (or instead of) a record.
+            # It is a storage artifact, not a malformed record: skip it, but count it.
+            nul_padded += 1
+            continue
         try:
             record = json.loads(line)
         except (ValueError, UnicodeError):
@@ -544,6 +549,8 @@ def _attach_sources(content: TranscriptContent, path: Path, raw=None, trailing_b
                         "payloads": "original-jsonl", "outcomes_unknown": sum(t.success is None for t in content.tool_uses),
                         "snapshot_bytes": len(raw), "snapshot_lines": len(raw.splitlines()), "snapshot_revision": content.source_revision}
     content.coverage["incomplete_trailing_bytes"] = trailing_bytes
+    if nul_padded:
+        content.coverage["nul_padded_records"] = nul_padded
     return content
 
 
