@@ -533,6 +533,11 @@ async function buildRuntime({ sdkPath, dbPath, configPath, indexId = 'default', 
   const sdk = await import(pathToFileURL(resolve(sdkPath)).href);
   const store = await sdk.createStore({ dbPath, configPath });
   const llm = store.internal.llm;
+  // Opt-in for slow hosts: the SDK unloads models after 5 idle minutes, and a cold
+  // load can outlast the request deadline (which then restarts the server). Keep
+  // the embedding model resident and load it before serving instead.
+  const warm = process.env.CLAUDE_NOTE_RECALL_WARM === '1';
+  if (warm) { llm.inactivityTimeoutMs = 0; llm.disposeModelsOnInactivity = false; }
   const loadRuntime = llm.loadLlamaRuntime.bind(llm);
   llm.loadLlamaRuntime = () => loadRuntime(false); // pinned SDK: no native source download/build during recall
   const models = { embed: cachedModel(llm, 'embed'), rerank: cachedModel(llm, 'rerank') };
@@ -557,6 +562,7 @@ async function buildRuntime({ sdkPath, dbPath, configPath, indexId = 'default', 
       models: Object.fromEntries(Object.entries(models).map(([kind, { path, ...model }]) => [kind, model])) },
     onFatal, onJobStart });
   await service.refresh(Date.now() + 3000);
+  if (warm && models.embed.cached) await store.searchVector('warm-up', { limit: 1 });
   return service;
 }
 
@@ -696,7 +702,7 @@ async function main() {
   const worker = new Worker(new URL(import.meta.url), { workerData: { kind: 'claude-note-runtime', sdkPath, dbPath,
     configPath, indexId: process.env.CLAUDE_NOTE_INDEX_ID || 'default' } });
   let fatalTimer;
-  const service = createRuntimeProxy(worker, { onFatal: () => { fatalTimer ||= setTimeout(() => process.exit(75), 100); } });
+  const service = createRuntimeProxy(worker, { startupMs: Number(process.env.CLAUDE_NOTE_RECALL_STARTUP_MS) || 15000, onFatal: () => { fatalTimer ||= setTimeout(() => process.exit(75), 100); } });
   await service.ready;
   const server = createHttpServer(service);
   server.requestTimeout = 10000; server.headersTimeout = 10000;
