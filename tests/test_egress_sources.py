@@ -114,6 +114,26 @@ class EgressSourceFormats(unittest.TestCase):
             with self.subTest(name=source.name), self.assertRaises(egress.EgressDenied):
                 self.prepare(source)
 
+    def test_opaque_binaries_opt_in_excuses_only_unsupported_binary_formats(self):
+        opaque = {'default': ['model'], 'opaque_binaries': True}
+        image = self.root / 'frame.png'
+        image.write_bytes(b'\x89PNG\r\n\x1a\n\0\0\0\rIHDR' + bytes(range(256)))
+        checkpoint = self.root / 'weights.pt'
+        with checkpoint.open('wb') as handle:
+            handle.truncate(8 * 1024 * 1024 + 1)
+        for source in (image, checkpoint):
+            with self.subTest(name=source.name):
+                with self.assertRaises(egress.EgressDenied):
+                    self.prepare(source)
+                self.assertEqual(self.prepare(source, rules=opaque), 'Public converted source view')
+        hidden = self.root / 'private.md'
+        hidden.write_bytes(b'---\nprivate: true\n---\n\0Private synthetic facts.')
+        fake = self.root / 'not-pdf.pdf'
+        fake.write_bytes(b'\xff\xfe\0')
+        for source in (hidden, fake):
+            with self.subTest(name=source.name), self.assertRaises(egress.EgressDenied):
+                self.prepare(source, rules=opaque)
+
     def test_allow_missing_excuses_only_listed_granted_scratch_paths(self):
         scratch = self.root / 'scratch'
         scratch.mkdir()

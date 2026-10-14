@@ -6,6 +6,7 @@ A derivation may go only to audiences allowed by every source. Redaction is a
 second boundary, never a substitute for confidentiality authorization.
 """
 
+import codecs
 import fcntl
 import fnmatch
 import hashlib
@@ -61,6 +62,34 @@ def policy():
         return value if isinstance(value, dict) else {}
     except FileNotFoundError:
         return {}
+
+
+_NATIVE_SUFFIXES = {'.jsonl', '.pdf', '.docx', '.zip', '.vscdb', '.sqlite', '.db'}
+
+
+def _opaque_binaries(rules=None):
+    rules = policy() if rules is None else rules
+    return rules.get("opaque_binaries", False) is True
+
+
+def _looks_opaque(descriptor, suffix):
+    """Bytes that can never carry Markdown controls: an unsupported binary format.
+
+    Supported native formats keep their own checks, and anything that opens like
+    frontmatter is always read as text so a NUL byte cannot hide `private: true`.
+    """
+    if suffix in _NATIVE_SUFFIXES:
+        return False
+    sample = os.pread(descriptor, 8192, 0)
+    if not sample or sample.lstrip().startswith(b'---'):
+        return False
+    if b'\0' in sample:
+        return True
+    try:
+        codecs.getincrementaldecoder('utf-8')().decode(sample, final=False)
+    except UnicodeDecodeError:
+        return True
+    return False
 
 
 def _allow_missing(rules=None):
@@ -138,7 +167,7 @@ def _check_artifact_audience(allowed, audience):
         raise EgressDenied('Artifact audience does not permit this destination')
 
 
-def _source_restrictions(path, parent):
+def _source_restrictions(path, parent, *, opaque_binaries=False):
     """Read policy metadata from one confined source descriptor.
 
     Converted PDF/Word inputs retain path and recorded-lineage policy; raw
@@ -157,10 +186,13 @@ def _source_restrictions(path, parent):
             before = os.fstat(descriptor)
             if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
                 raise EgressDenied('Derivation source must be a regular, singly linked file')
-            if before.st_size > limit:
+            # Opt-in: unsupported binaries (images, checkpoints, arrays) carry no
+            # controls to inspect; they neither block nor need a size bound.
+            opaque = opaque_binaries and _looks_opaque(descriptor, suffix)
+            if before.st_size > limit and not opaque:
                 raise EgressDenied('Derivation source exceeds its inspection bound')
             header = os.read(descriptor, 16)
-            binary = False
+            binary = opaque
             if suffix in {'.vscdb', '.sqlite', '.db'} and header == b'SQLite format 3\0':
                 binary = True  # native importer database, not authored Markdown
             elif suffix == '.zip' and header.startswith(b'PK\x03\x04'):
@@ -273,7 +305,7 @@ def prepare(text, *, audience, sources, explicit=False, rules=None):
                     continue  # repository identity; individual inputs are separate sources
                 # Frontmatter is a source-level restriction, not a property of
                 # the assembled JSON/model prompt. Bound the inspection.
-                source_text = _source_restrictions(path, parent)
+                source_text = _source_restrictions(path, parent, opaque_binaries=_opaque_binaries(rules))
                 _check_artifact_audience(_artifact_audiences(source_text), audience)
                 sources.extend(derivations(source_text))
             except (OSError, ValueError) as exc:
