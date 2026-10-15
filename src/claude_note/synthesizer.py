@@ -449,10 +449,12 @@ def synthesize_session(
 
     try:
         with tempfile.TemporaryDirectory(prefix="claude-note-extract-") as directory:
+            # The prompt goes on stdin: a long session's prompt exceeds Linux's
+            # 128 KiB limit for a single argument (E2BIG, "Argument list too long").
             result = subprocess.run(
-                egress.model_command(_claude_bin(), prompt, model=model),
-                capture_output=True, text=True, env=env, cwd=directory,
-                stdin=subprocess.DEVNULL, timeout=timeout,
+                egress.model_command(_claude_bin(), "", model=model)[:-1],
+                input=prompt, capture_output=True, text=True, env=env, cwd=directory,
+                timeout=timeout,
             )
 
         if result.returncode != 0:
