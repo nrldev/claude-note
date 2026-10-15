@@ -91,6 +91,15 @@ class EgressSourceFormats(unittest.TestCase):
         with self.assertRaises(egress.EgressDenied):
             self.prepare(source)
 
+    def test_native_jsonl_skips_nul_padded_lines_like_the_reader(self):
+        source = self.root / 'crashed-session.jsonl'
+        source.write_bytes(json.dumps({'type': 'user'}).encode() + b'\n' + b'\0' * 64
+                           + json.dumps({'type': 'queue-operation'}).encode() + b'\n')
+        self.assertEqual(self.prepare(source), 'Public converted source view')
+        source.write_bytes(json.dumps({'type': 'user'}).encode() + b'\n{"type": "u\0"}\n')
+        with self.assertRaises(egress.EgressDenied):
+            self.prepare(source)
+
     def test_source_size_limits_apply_before_reading_sparse_inputs(self):
         for name, size in (('note.md', 8 * 1024 * 1024 + 1),
                            ('native.jsonl', 256 * 1024 * 1024 + 1),

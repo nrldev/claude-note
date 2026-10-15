@@ -244,6 +244,10 @@ def _source_restrictions(path, parent, *, opaque_binaries=False):
                     if total > text_limit:
                         raise EgressDenied('Text source exceeds its inspection bound')
                 body = b''.join(chunks)
+                if suffix == '.jsonl' and b'\0' in body:
+                    # Same rule as the transcript reader: a crash mid-append leaves a
+                    # NUL-padded line; it is skipped there, so it is skipped here too.
+                    body = b'\n'.join(line for line in body.split(b'\n') if not line.startswith(b'\0'))
                 if b'\0' in body:
                     raise EgressDenied('Unsupported binary derivation source')
                 text = body.decode('utf-8')
