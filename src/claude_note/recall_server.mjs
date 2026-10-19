@@ -563,6 +563,8 @@ async function buildRuntime({ sdkPath, dbPath, configPath, indexId = 'default', 
     onFatal, onJobStart });
   await service.refresh(Date.now() + 3000);
   if (warm && models.embed.cached) await store.searchVector('warm-up', { limit: 1 });
+  // A reranker loaded lazily on the first real query can outlast its deadline too.
+  if (warm && models.rerank.cached) await llm.rerank('warm-up', [{ file: 'warm-up', title: '', text: 'warm up the reranker' }]);
   return service;
 }
 
