@@ -91,7 +91,7 @@ export async function prove(input) {
     // The pinned standalone FTS5 shadow content table is ordinary storage.
     const ftsLengths = db.prepare('SELECT octet_length(c0) AS path_length,octet_length(c1) AS title_length,'
       + 'octet_length(c2) AS body_length FROM documents_fts_content WHERE id=? LIMIT 2');
-    const hashes = new Set(), names = new Set();
+    const hashes = new Map(), names = new Set();
     let bytes = 0;
     for (const ref of input.references) {
       if (!ref || Object.keys(ref).sort().join(',') !== 'collection,path,revision'
@@ -128,7 +128,8 @@ export async function prove(input) {
       if (!expected.every((value, i) => actual[i] === value)
           && !expected.every((value, i) => actual[i] === normalizeCjkForFTS(value)))
         fail('Captured revision lacks an exact FTS row');
-      hashes.add(ref.revision);
+      if (!hashes.has(ref.revision)) hashes.set(ref.revision, new Set());
+      hashes.get(ref.revision).add(ref.collection);
     }
     lexical = true;
     if (!input.vector) return result(true);
@@ -144,38 +145,73 @@ export async function prove(input) {
     const fingerprint = getEmbeddingFingerprint(model);
     columns(db, 'content_vectors', ['hash', 'seq', 'pos', 'model', 'embed_fingerprint', 'total_chunks']);
     requireSDK('sqlite-vec').load(db);
-    const vecSchema = columns(db, 'vectors_vec', ['hash_seq', 'embedding']);
+    // QMD 2.8.3 also ships a collection-partitioned layout. Follow its
+    // legacy-first selection during migration, without opening a writable store.
+    const legacy = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='vectors_vec'").get();
+    const table = legacy ? 'vectors_vec' : 'vectors_by_collection';
+    const vecSchema = columns(db, table, legacy ? ['hash_seq', 'embedding'] : ['collection_id', 'embedding']);
     const dimension = /\bembedding\s+float\s*\[\s*(\d+)\s*\]/i.exec(vecSchema);
     if (!/\bUSING\s+vec0\s*\(/i.test(vecSchema) || !dimension) fail('Unsupported vector storage schema');
     const dimensions = Number(dimension[1]);
     if (!Number.isSafeInteger(dimensions) || dimensions < 1 || dimensions > 16384) fail('Unsupported vector dimensions');
     const metadata = db.prepare('SELECT seq,pos,model,embed_fingerprint,total_chunks FROM content_vectors WHERE hash=? ORDER BY seq LIMIT ?');
     // Never JOIN a sqlite-vec virtual table: pinned native builds can hang.
-    const vectors = db.prepare('SELECT embedding FROM vectors_vec WHERE hash_seq=? LIMIT 2');
+    let collectionIds, mappings;
+    if (!legacy) {
+      for (const [name, required] of [['vector_collection_ids', ['id', 'name']],
+                                     ['vector_rows', ['id', 'hash', 'seq', 'collection_id']]]) {
+        if (/\bUSING\b/i.test(columns(db, name, required)))
+          fail('Vector mappings require ordinary storage');
+      }
+      if (!/\bcollection_id\s+INTEGER\s+PARTITION\s+KEY\b/i.test(vecSchema))
+        fail('Unsupported vector collection partition');
+      collectionIds = db.prepare('SELECT id FROM vector_collection_ids WHERE name=? LIMIT 2');
+      mappings = db.prepare('SELECT id FROM vector_rows WHERE hash=? AND seq=? AND collection_id=? LIMIT 2');
+    }
+    const vectors = legacy
+      ? db.prepare('SELECT embedding FROM vectors_vec WHERE hash_seq=? LIMIT 2')
+      : db.prepare('SELECT collection_id,embedding FROM vectors_by_collection WHERE rowid=? LIMIT 2');
     let chunks = 0;
-    for (const hash of hashes) {
+    for (const [hash, collections] of hashes) {
       const rows = metadata.all(hash, MAX_CHUNKS + 1);
       const expected = rows[0]?.total_chunks;
       if (!Number.isSafeInteger(expected) || expected < 1 || expected > MAX_CHUNKS || rows.length !== expected)
         fail('Captured revision has missing or partial embedding chunks');
-      chunks += rows.length;
-      if (chunks > MAX_CHUNKS) fail('Vector proof exceeds its chunk bound');
       for (let seq = 0; seq < rows.length; seq++) {
         const row = rows[seq];
         if (row.seq !== seq || !Number.isSafeInteger(row.pos) || row.pos < 0
             || row.total_chunks !== expected || row.model !== model || row.embed_fingerprint !== fingerprint)
           fail('Captured embedding chunks differ from the active model or pipeline');
-        const stored = vectors.all(`${hash}_${seq}`);
-        const blob = stored[0]?.embedding;
-        if (stored.length !== 1 || !Buffer.isBuffer(blob) || blob.length !== dimensions * 4)
-          fail('Captured embedding metadata lacks a matching stored vector');
-        let nonzero = false;
-        for (let i = 0; i < dimensions; i++) {
-          const value = blob.readFloatLE(i * 4);
-          if (!Number.isFinite(value)) fail('Stored embedding contains nonfinite values');
-          nonzero ||= value !== 0;
+        for (const collection of legacy ? [null] : collections) {
+          if (++chunks > MAX_CHUNKS) fail('Vector proof exceeds its chunk bound');
+          let stored;
+          if (legacy) {
+            stored = vectors.all(`${hash}_${seq}`);
+          } else {
+            const ids = collectionIds.all(collection);
+            if (ids.length !== 1 || !Number.isSafeInteger(ids[0].id))
+              fail('Captured collection has no unique vector partition');
+            const partition = ids[0].id;
+            const mapping = mappings.all(hash, seq, partition);
+            if (mapping.length !== 1 || !Number.isSafeInteger(mapping[0].id))
+              fail('Captured chunk has no unique vector mapping');
+            // sqlite-vec requires integer rowids; better-sqlite3 binds Number
+            // as double. BigInt preserves the required native SQLite type.
+            stored = vectors.all(BigInt(mapping[0].id));
+            if (stored.length !== 1 || stored[0].collection_id !== partition)
+              fail('Stored vector differs from its collection partition');
+          }
+          const blob = stored[0]?.embedding;
+          if (stored.length !== 1 || !Buffer.isBuffer(blob) || blob.length !== dimensions * 4)
+            fail('Captured embedding metadata lacks a matching stored vector');
+          let nonzero = false;
+          for (let i = 0; i < dimensions; i++) {
+            const value = blob.readFloatLE(i * 4);
+            if (!Number.isFinite(value)) fail('Stored embedding contains nonfinite values');
+            nonzero ||= value !== 0;
+          }
+          if (!nonzero) fail('Stored embedding has zero norm');
         }
-        if (!nonzero) fail('Stored embedding has zero norm');
       }
     }
     return result(true, true);

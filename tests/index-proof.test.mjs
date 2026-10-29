@@ -47,6 +47,66 @@ function fixture(t, {body = '# Synthetic\n\nExact synthetic indexed revision.\n'
 
 const native = (name, fn) => test(name, {skip: !sdk}, fn);
 
+function partitionedFixture(t) {
+  const context = fixture(t);
+  const {db, revision} = context;
+  db.exec('DROP TABLE vectors_vec;'
+    + 'CREATE TABLE vector_collection_ids(id INTEGER PRIMARY KEY,name TEXT UNIQUE);'
+    + 'CREATE TABLE vector_rows(id INTEGER PRIMARY KEY,hash TEXT,seq INTEGER,collection_id INTEGER,UNIQUE(hash,seq,collection_id));'
+    + 'CREATE VIRTUAL TABLE vectors_by_collection USING vec0(collection_id INTEGER PARTITION KEY,embedding float[2] distance_metric=cosine);'
+    + "INSERT INTO vector_collection_ids VALUES(1,'synthetic'),(2,'other');");
+  // Both collections share content/chunk metadata but need their own vectors.
+  db.prepare('INSERT INTO documents VALUES(2,?,?,?,?,1)').run('other', 'second.md', 'Synthetic', revision);
+  const body = db.prepare('SELECT doc FROM content WHERE hash=?').get(revision).doc;
+  db.prepare('INSERT INTO documents_fts(rowid,filepath,title,body) VALUES(2,?,?,?)')
+    .run('other/second.md', 'Synthetic', body);
+  for (let partition = 1; partition <= 2; partition++) {
+    for (let seq = 0; seq < 2; seq++) {
+      const id = partition * 10 + seq;
+      db.prepare('INSERT INTO vector_rows VALUES(?,?,?,?)').run(id, revision, seq, partition);
+      db.prepare('INSERT INTO vectors_by_collection(rowid,collection_id,embedding) VALUES(?,?,?)')
+        .run(BigInt(id), BigInt(partition), new Float32Array([1, .25 + seq]));
+    }
+  }
+  context.input.references.push({collection: 'other', path: 'second.md', revision});
+  return context;
+}
+
+native('partitioned vectors prove every captured collection without changing DB/config', async t => {
+  const {db, input, root} = partitionedFixture(t);
+  db.close();
+  const before = Object.fromEntries(readdirSync(root).map(name => [name, readFileSync(join(root, name))]));
+  assert.deepEqual(await prove(input), {lexical: true, vector: true, reason: ''});
+  assert.deepEqual(readdirSync(root).sort(), Object.keys(before).sort());
+  for (const [name, body] of Object.entries(before)) assert.deepEqual(readFileSync(join(root, name)), body);
+});
+
+native('partitioned proof rejects missing mappings, missing vectors, wrong partitions and zero vectors', async t => {
+  for (const scenario of ['mapping', 'vector', 'partition', 'zero', 'collection']) {
+    const {db, input} = partitionedFixture(t);
+    if (scenario === 'mapping') db.exec('DELETE FROM vector_rows WHERE id=21');
+    if (scenario === 'collection') db.exec('DELETE FROM vector_collection_ids WHERE id=2');
+    if (['vector', 'partition', 'zero'].includes(scenario))
+      db.prepare('DELETE FROM vectors_by_collection WHERE rowid=?').run(21n);
+    if (scenario === 'partition' || scenario === 'zero')
+      db.prepare('INSERT INTO vectors_by_collection(rowid,collection_id,embedding) VALUES(?,?,?)')
+        .run(21n, scenario === 'partition' ? 1n : 2n,
+          new Float32Array(scenario === 'zero' ? [0, 0] : [1, .25]));
+    const answer = await prove(input);
+    assert.equal(answer.lexical, true, scenario);
+    assert.equal(answer.vector, false, scenario);
+  }
+});
+
+native('partitioned proof rejects ordinary vector storage and prefers legacy during migration', async t => {
+  const {db, input} = partitionedFixture(t);
+  db.exec('CREATE VIRTUAL TABLE vectors_vec USING vec0(hash_seq TEXT PRIMARY KEY,embedding float[2] distance_metric=cosine)');
+  assert.equal((await prove(input)).vector, false);
+  db.exec('DROP TABLE vectors_vec; DROP TABLE vectors_by_collection;'
+    + 'CREATE TABLE vectors_by_collection(collection_id INTEGER,embedding BLOB)');
+  assert.equal((await prove(input)).vector, false);
+});
+
 test('unsupported or invalid SQLite allocator caps fail closed', () => {
   for (const value of [undefined, null, 0, -1, true, '16777216', 16777217, NaN, Infinity]) {
     assert.throws(() => capSqliteAllocator({pragma: () => value}), /allocator cap/);
