@@ -13,6 +13,8 @@ import sys
 def _knowledge_parser(with_eval: bool = False) -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="claude-note")
     sub = p.add_subparsers(dest="command")
+    from .opencode import add_parsers as add_opencode_parsers
+    add_opencode_parsers(sub)
 
     h = sub.add_parser("hook", help="Hook handlers (read the hook JSON on stdin)")
     h.add_argument("which", choices=["recall", "sentinel"])
@@ -45,11 +47,15 @@ def _knowledge_parser(with_eval: bool = False) -> argparse.ArgumentParser:
     return p
 
 
-KNOWLEDGE_COMMANDS = {"hook", "recall", "refresh", "doctor", "eval", "claim", "index-refresh"}
+KNOWLEDGE_COMMANDS = {"hook", "recall", "refresh", "doctor", "eval", "claim", "index-refresh",
+                      "install-opencode", "opencode-capture"}
 
 
 def _knowledge_main(argv: list) -> int:
     args = _knowledge_parser(with_eval=argv[:1] == ["eval"]).parse_args(argv)
+    if args.command in {'install-opencode', 'opencode-capture'}:
+        from .opencode import main as opencode_main
+        return opencode_main(args)
     if args.command == "hook":
         if args.which == "recall":
             from .recall import hook_main

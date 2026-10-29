@@ -3,7 +3,7 @@ Where a note came from: which assistant produced the session, and who wrote it.
 
 Every note claude-note writes carries two frontmatter fields:
 
-  assistant: claude-code | codex | cursor | claude-app | chatgpt
+  assistant: claude-code | codex | opencode | cursor | claude-app | chatgpt
   author:    the owner's email
 
 The daily push forwards both, so the shared vault can say which assistant a
@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-ASSISTANTS = ("claude-code", "codex", "cursor", "claude-app", "chatgpt")
+ASSISTANTS = ("claude-code", "codex", "cursor", "claude-app", "chatgpt", "opencode")
 
 # Importer source name (importers.write_session) -> assistant.
 _IMPORTER_SOURCES = {
@@ -29,6 +29,7 @@ _IMPORTER_SOURCES = {
     "chatgpt": "chatgpt",
     "codex": "codex",
     "claude-code": "claude-code",
+    "opencode": "opencode",
 }
 
 FORESYN_CONFIG = Path.home() / ".foresyn/config.json"

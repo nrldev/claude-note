@@ -521,7 +521,7 @@ def _attach_sources(content: TranscriptContent, path: Path, raw=None, trailing_b
         origins = record.get('derivation_sources')
         if isinstance(origins, list) and all(isinstance(item, str) for item in origins):
             content.context_sources.extend(item for item in origins if item not in content.context_sources)
-        elif record.get('source') in {'claude-ai', 'chatgpt', 'cursor'}:
+        elif record.get('source') in {'claude-ai', 'chatgpt', 'cursor', 'opencode'}:
             content.context_sources.append('unknown-import-origin')
         payload = record.get("payload", record)
         if not isinstance(payload, dict):

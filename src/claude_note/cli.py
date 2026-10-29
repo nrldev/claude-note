@@ -644,6 +644,9 @@ def main() -> int:
     push_parser.add_argument("--install-agent", action="store_true", help="Install the daily 03:00 launchd agent")
     push_parser.set_defaults(func=cmd_push)
 
+    from .opencode import add_parsers as add_opencode_parsers
+    add_opencode_parsers(subparsers)
+
     # install-codex-hooks command
     codex_parser = subparsers.add_parser(
         "install-codex-hooks", help="Add claude-note to ~/.codex/hooks.json (Codex CLI and ChatGPT app)"

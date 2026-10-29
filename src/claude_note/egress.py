@@ -302,7 +302,7 @@ def prepare(text, *, audience, sources, explicit=False, rules=None):
                     raise EgressDenied("Resolved source policy does not permit this audience")
                 recorded, artifact_audiences = _recorded_lineage(path)
                 _check_artifact_audience(artifact_audiences, audience)
-                if path.parent.name in {'claude-ai', 'chatgpt', 'cursor'} and path.parent.parent.name == 'transcripts' and not recorded:
+                if path.parent.name in {'claude-ai', 'chatgpt', 'cursor', 'opencode'} and path.parent.parent.name == 'transcripts' and not recorded:
                     raise EgressDenied('Imported transcript origin is unknown; reimport original source')
                 sources.extend(recorded)
                 if path.is_dir():

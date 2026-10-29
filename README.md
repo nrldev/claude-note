@@ -2,7 +2,7 @@
 
 **Your agents already solved this. Claude Note makes sure they remember.**
 
-Claude Note captures what Claude Code, Codex, Cursor and ChatGPT sessions learn, keeps it as typed
+Claude Note captures what Claude Code, Codex, OpenCode, Cursor and ChatGPT sessions learn, keeps it as typed
 Markdown notes, and puts the right notes in front of the agent *before* it acts: on every prompt,
 and again the moment a command fails.
 
@@ -98,6 +98,21 @@ discovery preferences do not migrate an existing runtime automatically; see
 
 Codex runs new hooks only after you trust them: run `codex` once and accept the prompt.
 
+## OpenCode
+
+OpenCode V1 (tested with 1.19.4) can use the same vault and recall server:
+
+```bash
+claude-note install-opencode
+# Restart OpenCode to load the global plugin.
+```
+
+The plugin recalls notes into model context, adds failure advice to failed shell
+results, retains memory instructions during compaction, and captures top-level
+sessions on idle/error and before compaction. Raw exports remain local; the
+existing worker handles synthesis under the configured source policy. See
+[OpenCode setup and recovery](docs/opencode.md).
+
 ## Everyday use
 
 ```bash
@@ -161,6 +176,7 @@ All of it fails open under a wall-clock budget: recall can never block a prompt.
 |---|---|
 | Claude Code | `PostToolUse`, `UserPromptSubmit`, `Stop` hooks, plus a recovery sweep of recent sessions. |
 | Codex CLI / desktop | Hooks where trusted, plus a rollout recovery sweep. Automation and subagent threads are skipped. |
+| OpenCode V1 | Installed local plugin: recall, shell failure advice, idle/error and compaction capture. Child sessions are skipped. |
 | Cursor | Reads supported local chat databases, read-only. |
 | Claude desktop / web, ChatGPT | Export zips, dropped in the import folder or passed to `claude-note import`. |
 
